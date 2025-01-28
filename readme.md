@@ -1,5 +1,7 @@
 # wdf.rs
 
+> note: i wrote this in a haze over 2 evenings and it doesn't even compile. 
+
 Wave Digital Filter library `🦀 xXx_WrITteN_iN_rUsT_xXx 🦀`
 
 - I did my final year electronic engineering project on an digital guitar amplifier using wave digital filters.
