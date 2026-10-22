@@ -1,79 +1,52 @@
-pub mod sources {
-    use crate::components::BaseWDF;
-    use crate::components::RootWDF;
-    use crate::components::WDFComponent;
-    use std::cell::RefCell;
-    use std::rc::Rc;
+use crate::components::WDFComponent;
 
-    // Define the IdealVoltageSource component
-    pub struct IdealVoltageSource {
-        pub base: RootWDF,
-        next: Option<Rc<RefCell<dyn WDFComponent>>>,
-        v: f64,
-    }
+/// Ideal voltage source acting as the root of a WDF tree.
+///
+/// A root is not adapted, so it is not itself a `WDFComponent`: it owns the
+/// subtree below it and drives one wave exchange per sample.
+#[derive(Debug, Clone)]
+pub struct IdealVoltageSource<C: WDFComponent> {
+    pub child: C,
+    v: f64,
+    /// Wave incident on the source (reflected by the child)
+    a: f64,
+    /// Wave reflected by the source (incident on the child)
+    b: f64,
+}
 
-    impl IdealVoltageSource {
-        pub fn new(next: Option<Rc<RefCell<dyn WDFComponent>>>) -> Self {
-            let mut source = IdealVoltageSource { next: next, v: 0.0 };
-            source.calc_impedance();
-            source
-        }
-
-        pub fn set_voltage(&mut self, voltage: f64) {
-            if self.v != voltage {
-                self.v = voltage;
-            }
+impl<C: WDFComponent> IdealVoltageSource<C> {
+    pub fn new(child: C) -> Self {
+        IdealVoltageSource {
+            child,
+            v: 0.0,
+            a: 0.0,
+            b: 0.0,
         }
     }
 
-    impl WDFComponent for IdealVoltageSource {
-        fn accept_incident_wave(&mut self, a: f64) {
-            self.a = a;
-        }
+    pub fn set_voltage(&mut self, voltage: f64) {
+        self.v = voltage;
+    }
 
-        fn propagate_reflected_wave(&mut self) -> f64 {
-            self.b = -self.a + 2.0 * self.v;
-            self.b
-        }
+    pub fn voltage(&self) -> f64 {
+        self.v
+    }
 
-        fn calc_impedance(&mut self) {
-            unimplemented!();
-            // this.Rp = this.Rp;
-            // this.G = 1.0 / this.Rp;
-        }
+    /// Run one wave exchange: gather the child's reflected wave, reflect it
+    /// off the source (`b = 2v - a`) and send it back down the tree.
+    pub fn process(&mut self) {
+        self.a = self.child.reflected();
+        self.b = 2.0 * self.v - self.a;
+        self.child.incident(self.b);
+    }
 
-        fn update_impedance(&mut self) {
-            self.calc_impedance();
-        }
+    pub fn calc_impedance(&mut self) {
+        self.child.calc_impedance();
+    }
 
-        fn connect_to_parent(&mut self, parent: Option<Rc<RefCell<dyn WDFComponent>>>) {}
-
-        fn reset(&mut self) {
-            todo!();
-        }
-
-        fn print_type(&self) {
-            println!("IdealVoltageSource")
-        }
-
-        fn get_port_admittance(&self) -> f64 {
-            self.g
-        }
-
-        fn get_port_impedance(&self) -> f64 {
-            self.rp
-        }
-
-        fn get_reflected_wave(&self) -> f64 {
-            self.b
-        }
-
-        fn get_current_from_wave(&self) -> f64 {
-            self.base.get_current_from_wave()
-        }
-
-        fn get_voltage_from_wave(&self) -> f64 {
-            self.base.get_voltage_from_wave()
-        }
+    pub fn reset(&mut self) {
+        self.a = 0.0;
+        self.b = 0.0;
+        self.child.reset();
     }
 }

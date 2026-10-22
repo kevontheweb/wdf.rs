@@ -1,31 +1,30 @@
-pub mod components;
 pub mod circuit;
-use crate::components::circuit::Circuit;
+pub mod components;
 
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
-}
+pub use circuit::Circuit;
+pub use components::{
+    Capacitor, IdealVoltageSource, Inverter, ParallelAdaptor, Resistor, SeriesAdaptor, WDFComponent,
+};
 
-pub fn RCLowPassFilter() {
+/// Tree used by [`rc_low_pass_filter`]: `Vs -- Inverter -- Series(R, C)`.
+pub type RcTree = Inverter<SeriesAdaptor<Resistor, Capacitor>>;
 
-let c = 1e-6;
-let r = 1.0 / (2.0 * constants::PI * c * fc);
-let r1 = Resistor::new(r);
-let c1 = Capacitor::new(c, constants::SAMPLE_RATE);
-let s1 = SeriesAdaptor::new(&r1, &c1);
-let i1 = Inverter::new(&s1);
-let vs = IdealVoltageSource::new(&i1);
-let rc = Circuit::new(&vs, &vs, &c1);
-let output = rc.process_signal(input_signal);
-}
+/// Type of the circuit returned by [`rc_low_pass_filter`].
+pub type RcLowPass = Circuit<RcTree, fn(&RcTree) -> f64>;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
+/// First-order RC low-pass: voltage source in series with R and C, output
+/// taken across C.
+///
+/// A series adaptor uses the passive sign convention (port voltages sum to
+/// zero), so the source is connected through an [`Inverter`] to make the
+/// capacitor voltage follow the source with positive sign.
+///
+/// `R = 1 / (2 * pi * C * fc)`. The capacitor is discretised with the
+/// bilinear transform, so the actual -3 dB point is frequency-warped away
+/// from `cutoff_hz` as it approaches Nyquist.
+pub fn rc_low_pass_filter(cutoff_hz: f64, capacitance: f64, sample_rate: f64) -> RcLowPass {
+    let r = 1.0 / (2.0 * std::f64::consts::PI * capacitance * cutoff_hz);
+    let series = SeriesAdaptor::new(Resistor::new(r), Capacitor::new(capacitance, sample_rate));
+    let tree = Inverter::new(series);
+    Circuit::new(IdealVoltageSource::new(tree), |t| t.child.child_b.voltage())
 }

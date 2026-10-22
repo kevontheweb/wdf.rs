@@ -1,96 +1,74 @@
-pub mod series_adaptor{
-use crate::components::base_wdf::base_wdf::BaseWDF;
-use crate::components::root_wdf::root_wdf::RootWDF;
-use crate::components::WDFComponent;
-use std::cell::RefCell;
-use std::rc::Rc;
+use crate::components::{BaseWDF, WDFComponent};
 
-pub struct SeriesAdaptor {
+/// Two-port series adaptor, adapted at its upward-facing port.
+///
+/// `Rp = R_a + R_b`. Both children are owned and reachable through the public
+/// `child_a` / `child_b` fields.
+#[derive(Debug, Clone)]
+pub struct SeriesAdaptor<A: WDFComponent, B: WDFComponent> {
     base: BaseWDF,
-    child_a: Rc<RefCell<dyn WDFComponent>>,
-    child_b: Rc<RefCell<dyn WDFComponent>>,
-    b_temp: f64,
-    b_child_a: f64,
+    pub child_a: A,
+    pub child_b: B,
+    /// `R_a / (R_a + R_b)`
+    a_reflect: f64,
 }
 
-impl SeriesAdaptor {
-    pub fn new(
-        &self,
-        child_a: Rc<RefCell<dyn WDFComponent>>,
-        child_b: Rc<RefCell<dyn WDFComponent>>,
-    ) -> Self {
+impl<A: WDFComponent, B: WDFComponent> SeriesAdaptor<A, B> {
+    pub fn new(child_a: A, child_b: B) -> Self {
         let mut series = SeriesAdaptor {
-            base: BaseWDF {
-                ..Default::default()
-            },
+            base: BaseWDF::default(),
             child_a,
             child_b,
-            b_temp: 0.0,
-            b_child_a: 1.0,
+            a_reflect: 1.0,
         };
-        self.child_a
-            .borrow_mut()
-            .connect_to_parent(self.base.parent.to_owned());
-        self.child_b
-            .borrow_mut()
-            .connect_to_parent(self.base.parent.to_owned());
         series.calc_impedance();
         series
     }
 }
 
-impl WDFComponent for SeriesAdaptor {
-    fn connect_to_parent(&mut self, parent: Option<Rc<RefCell<dyn WDFComponent>>>) {
-        todo!();
-    }
-
-    fn accept_incident_wave(&mut self, a: f64) {
-        self.b_temp = self.child_a.borrow().get_port_impedance()
-            - self.b_child_a
-                * (a + self.child_a.borrow().get_reflected_wave()
-                    + self.child_b.borrow().get_reflected_wave());
-        self.child_a.borrow_mut().accept_incident_wave(self.b_temp);
-        self.child_b
-            .borrow_mut()
-            .accept_incident_wave(a + self.b_temp);
-        self.base.a = a;
-    }
-
-    fn propagate_reflected_wave(&mut self) -> f64 {
-        self.base.b = -(self.child_a.borrow_mut().propagate_reflected_wave()
-            + self.child_b.borrow_mut().propagate_reflected_wave());
-        self.base.b
+impl<A: WDFComponent, B: WDFComponent> WDFComponent for SeriesAdaptor<A, B> {
+    fn port_impedance(&self) -> f64 {
+        self.base.rp
     }
 
     fn calc_impedance(&mut self) {
-        self.base.rp =
-            self.child_a.borrow().get_port_impedance() + self.child_b.borrow().get_port_impedance();
-        self.base.g = 1.0 / self.base.rp;
-        self.b_child_a = self.child_a.borrow().get_port_impedance() / self.base.rp;
+        self.child_a.calc_impedance();
+        self.child_b.calc_impedance();
+        let ra = self.child_a.port_impedance();
+        let rb = self.child_b.port_impedance();
+        self.base.set_impedance(ra + rb);
+        self.a_reflect = ra / self.base.rp;
     }
 
-    fn update_impedance(&mut self) {
-        self.base.update_impedance();
+    fn incident(&mut self, a: f64) {
+        let b_a = self.child_a.reflected_wave();
+        let b_b = self.child_b.reflected_wave();
+        let b1 = b_a - self.a_reflect * (a + b_a + b_b);
+        self.child_a.incident(b1);
+        self.child_b.incident(-(a + b1));
+        self.base.a = a;
+    }
+
+    fn reflected(&mut self) -> f64 {
+        self.base.b = -(self.child_a.reflected() + self.child_b.reflected());
+        self.base.b
+    }
+
+    fn reflected_wave(&self) -> f64 {
+        self.base.b
+    }
+
+    fn voltage(&self) -> f64 {
+        self.base.voltage()
+    }
+
+    fn current(&self) -> f64 {
+        self.base.current()
     }
 
     fn reset(&mut self) {
         self.base.reset();
+        self.child_a.reset();
+        self.child_b.reset();
     }
-
-    fn get_reflected_wave(&self) -> f64 {
-        self.base.get_reflected_wave()
-    }
-
-    fn get_port_impedance(&self) -> f64 {
-        self.base.get_port_impedance()
-    }
-
-    fn get_port_admittance(&self) -> f64 {
-        self.base.get_port_admittance()
-    }
-
-    fn print_type(&self) {
-        println!("SeriesAdaptor");
-    }
-}
 }

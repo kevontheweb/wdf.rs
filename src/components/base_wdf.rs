@@ -1,76 +1,69 @@
-pub mod base_wdf {
-    use crate::components::root_wdf::root_wdf::RootWDF;
-    use crate::components::WDFComponent;
-    use std::cell::RefCell;
-    use std::rc::Rc;
+/// Port state shared by every WDF element.
+///
+/// Wave conventions (voltage waves, as in chowdsp_wdf):
+///
+/// * `a` is the wave incident *into* the element, `b` the wave reflected *out of* it
+/// * `v = (a + b) / 2`
+/// * `i = (a - b) / (2 * rp)`
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct BaseWDF {
+    /// Incident wave
+    pub a: f64,
+    /// Reflected wave
+    pub b: f64,
+    /// Port impedance (ohms)
+    pub rp: f64,
+    /// Port admittance (siemens), always `1 / rp`
+    pub g: f64,
+}
 
-    // Define the base component with common functionality
-    #[derive(Default)]
-    pub struct BaseWDF {
-        pub a: f64,
-        pub b: f64,
-        pub rp: f64,
-        pub g: f64,
-        pub parent: Option<Rc<RefCell<dyn WDFComponent>>>,
+impl BaseWDF {
+    pub fn new(rp: f64) -> Self {
+        let mut base = BaseWDF::default();
+        base.set_impedance(rp);
+        base
     }
 
-    impl BaseWDF {
-        fn update_impedance_common(&mut self) {
-            self.calc_impedance();
-            if let Some(parent) = &self.parent {
-                let mut parent_ref = parent.borrow_mut();
-                parent_ref.update_impedance();
-            }
-        }
+    /// Set the port impedance and keep the admittance in sync.
+    pub fn set_impedance(&mut self, rp: f64) {
+        self.rp = rp;
+        self.g = 1.0 / rp;
     }
 
-    impl WDFComponent for BaseWDF {
-        fn connect_to_parent(&mut self, parent: Option<Rc<RefCell<dyn WDFComponent>>>) {
-            todo!();
-        }
+    pub fn reset(&mut self) {
+        self.a = 0.0;
+        self.b = 0.0;
+    }
 
-        fn accept_incident_wave(&mut self, a: f64) {
-            self.a = a;
-        }
+    pub fn voltage(&self) -> f64 {
+        0.5 * (self.a + self.b)
+    }
 
-        fn propagate_reflected_wave(&mut self) -> f64 {
-            unimplemented!()
-        }
+    pub fn current(&self) -> f64 {
+        (self.a - self.b) / (2.0 * self.rp)
+    }
+}
 
-        fn calc_impedance(&mut self) {
-            unimplemented!()
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        fn update_impedance(&mut self) {
-            self.update_impedance_common();
-        }
+    #[test]
+    fn voltage_and_current_from_waves() {
+        let mut p = BaseWDF::new(100.0);
+        p.a = 3.0;
+        p.b = 1.0;
+        assert_eq!(p.voltage(), 2.0);
+        assert_eq!(p.current(), 2.0 / 200.0);
+        assert_eq!(p.g, 0.01);
+    }
 
-        fn reset(&mut self) {
-            self.a = 0.0;
-            self.b = 0.0;
-        }
-
-        fn get_reflected_wave(&self) -> f64 {
-            self.b
-        }
-        fn get_port_impedance(&self) -> f64 {
-            self.rp
-        }
-
-        fn get_port_admittance(&self) -> f64 {
-            self.g
-        }
-
-        fn print_type(&self) {
-            println!("BaseWDF");
-        }
-
-        fn get_current_from_wave(&self) -> f64 {
-            (self.a + self.b) / (self.rp * 2.0)
-        }
-
-        fn get_voltage_from_wave(&self) -> f64 {
-            self.a + self.b / 2.0
-        }
+    #[test]
+    fn reset_clears_waves_but_not_impedance() {
+        let mut p = BaseWDF::new(50.0);
+        p.a = 1.0;
+        p.b = 2.0;
+        p.reset();
+        assert_eq!((p.a, p.b, p.rp), (0.0, 0.0, 50.0));
     }
 }

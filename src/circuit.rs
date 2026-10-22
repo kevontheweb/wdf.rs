@@ -1,99 +1,55 @@
-/*
-class Circuit {
-private:
-  RootWDF *root;
-  Source *source;
-  BaseWDF *output;
+use crate::components::{IdealVoltageSource, WDFComponent};
 
-public:
-  Circuit(RootWDF *root, Source *source, BaseWDF *output) : root(root), source(source), output(output) {}
-
-  virtual double process_sample(double sample) {
-    this->source->set_voltage(sample);
-    this->root->accept_incident_wave(this->root->next->propagate_reflected_wave());
-    this->root->next->accept_incident_wave(this->root->propagate_reflected_wave());
-    return this->output->get_voltage_from_wave();
-  }
-
-  std::vector<double> process_signal(const std::vector<double> &input_signal) {
-    std::vector<double> output;
-    double output_sample = 0.0f;
-    for (const double &sample : input_signal) {
-      output_sample = this->process_sample(sample);
-      output.push_back(output_sample); // push new value onto vector
-    }
-    return output;
-  }
-*/
-
-use crate::components::base_wdf::base_wdf::BaseWDF;
-use crate::components::root_wdf::root_wdf::RootWDF;
-use crate::components::sources::sources::IdealVoltageSource;
-use crate::components::WDFComponent;
-use std::cell::RefCell;
-use std::rc::Rc;
-
-// Define the Circuit struct
-struct Circuit {
-    root: Rc<RefCell<RootWDF>>,
-    source: Rc<RefCell<IdealVoltageSource>>,
-    output: Rc<RefCell<BaseWDF>>,
+/// A voltage-driven WDF circuit plus a probe that reads the output voltage.
+///
+/// ```ignore
+/// let mut circuit = Circuit::new(source, |tree| tree.child_b.voltage());
+/// let out = circuit.process_signal(&input);
+/// ```
+pub struct Circuit<C: WDFComponent, F: Fn(&C) -> f64> {
+    source: IdealVoltageSource<C>,
+    output: F,
 }
 
-impl Circuit {
-    pub fn new(
-        root: Rc<RefCell<RootWDF>>,
-        source: Rc<RefCell<IdealVoltageSource>>,
-        output: Rc<RefCell<BaseWDF>>,
-    ) -> Self {
-        Circuit {
-            root: root.clone(),
-            source: source.clone(),
-            output: output.clone(),
+impl<C: WDFComponent, F: Fn(&C) -> f64> Circuit<C, F> {
+    /// `output` picks the voltage to return from the tree below the source.
+    pub fn new(source: IdealVoltageSource<C>, output: F) -> Self {
+        let mut circuit = Circuit { source, output };
+        circuit.update_impedance();
+        circuit
+    }
+
+    pub fn process_sample(&mut self, sample: f64) -> f64 {
+        self.source.set_voltage(sample);
+        self.source.process();
+        (self.output)(&self.source.child)
+    }
+
+    /// Process `input` into the pre-allocated `output` slice. Does not allocate.
+    pub fn process_block(&mut self, input: &[f64], output: &mut [f64]) {
+        assert_eq!(input.len(), output.len(), "input and output lengths differ");
+        for (x, y) in input.iter().zip(output.iter_mut()) {
+            *y = self.process_sample(*x);
         }
     }
 
-    pub fn process_sample(&self, sample: f64) -> f64 {
-        let mut source_ref = self.source.borrow_mut();
-        source_ref.set_voltage(sample);
-
-        let mut root_ref = self.root.borrow_mut();
-        root_ref.accept_incident_wave(
-            root_ref
-                .next
-                .as_ref()
-                .unwrap()
-                .borrow()
-                .propagate_reflected_wave(),
-        );
-
-        let mut output_ref = self.output.borrow_mut();
-        output_ref.a = root_ref.propagate_reflected_wave();
-
-        output_ref.get_voltage_from_wave()
-    }
-
-    pub fn process_signal(&self, input_signal: Vec<f64>) -> Vec<f64> {
-        let mut output = Vec::new();
-        for sample in input_signal {
-            output.push(self.process_sample(sample));
-        }
+    pub fn process_signal(&mut self, input_signal: &[f64]) -> Vec<f64> {
+        let mut output = vec![0.0; input_signal.len()];
+        self.process_block(input_signal, &mut output);
         output
     }
-}
 
-// Example usage
-fn main() {
-    let root = Rc::new(RefCell::new(RootWDF::new(Rc::new(RefCell::new(
-        BaseWDF::default(),
-    )))));
-    let source = Rc::new(RefCell::new(IdealVoltageSource::new(Some(&*root.borrow()))));
-    let output = Rc::new(RefCell::new(BaseWDF::default()));
+    /// Recompute all port impedances. Call after changing a component value.
+    pub fn update_impedance(&mut self) {
+        self.source.calc_impedance();
+    }
 
-    let circuit = Circuit::new(root.clone(), source.clone(), output.clone());
+    pub fn reset(&mut self) {
+        self.source.reset();
+    }
 
-    let input_signal = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-    let output_signal = circuit.process_signal(input_signal);
-
-    println!("Output signal: {:?}", output_signal);
+    /// Access the tree to change component values, then call `update_impedance`.
+    pub fn tree_mut(&mut self) -> &mut C {
+        &mut self.source.child
+    }
 }

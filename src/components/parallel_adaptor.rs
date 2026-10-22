@@ -1,96 +1,85 @@
-pub mod parallel_adaptor{
-use crate::components::base_wdf::base_wdf::BaseWDF;
-use crate::components::root_wdf::root_wdf::RootWDF;
-use crate::components::WDFComponent;
-use std::cell::RefCell;
-use std::rc::Rc;
+use crate::components::{BaseWDF, WDFComponent};
 
-
-pub struct ParallelAdaptor {
+/// Two-port parallel adaptor, adapted at its upward-facing port.
+///
+/// `G = G_a + G_b`, `Rp = 1 / G`. Both children are owned and reachable
+/// through the public `child_a` / `child_b` fields.
+#[derive(Debug, Clone)]
+pub struct ParallelAdaptor<A: WDFComponent, B: WDFComponent> {
     base: BaseWDF,
-    child_a: Rc<RefCell<dyn WDFComponent>>,
-    child_b: Rc<RefCell<dyn WDFComponent>>,
+    pub child_a: A,
+    pub child_b: B,
+    /// `G_a / (G_a + G_b)`
+    a_reflect: f64,
+    /// `b_0 - b_b` from the last `reflected()` call
     b_temp: f64,
+    /// `b_b - b_a` from the last `reflected()` call
     b_diff: f64,
-    b2: f64,
-    b_child_a: f64,
 }
 
-impl ParallelAdaptor {
-    pub fn new(
-        &self,
-        child_a: Rc<RefCell<dyn WDFComponent>>,
-        child_b: Rc<RefCell<dyn WDFComponent>>,
-    ) -> Self {
+impl<A: WDFComponent, B: WDFComponent> ParallelAdaptor<A, B> {
+    pub fn new(child_a: A, child_b: B) -> Self {
         let mut parallel = ParallelAdaptor {
-            base: BaseWDF {
-                ..Default::default()
-            },
+            base: BaseWDF::default(),
             child_a,
             child_b,
-            b_diff: 0.0,
+            a_reflect: 1.0,
             b_temp: 0.0,
-            b2: 0.0,
-            b_child_a: 1.0,
+            b_diff: 0.0,
         };
-        self.child_a
-            .borrow_mut()
-            .connect_to_parent(self.base.parent.to_owned());
-        self.child_b
-            .borrow_mut()
-            .connect_to_parent(self.base.parent.to_owned());
         parallel.calc_impedance();
         parallel
     }
 }
 
-impl WDFComponent for ParallelAdaptor {
-    fn connect_to_parent(&mut self, parent: Option<Rc<RefCell<dyn WDFComponent>>>) {
-        todo!();
-    }
-
-    fn accept_incident_wave(&mut self, a: f64) {
-        self.b2 = a + self.b_temp;
-        self.base.rp = 1.0 / self.base.g;
-        self.b_child_a = self.child_a.borrow().get_port_admittance() / self.base.g;
-    }
-
-    fn propagate_reflected_wave(&mut self) -> f64 {
-        self.b_diff = self.child_b.borrow_mut().propagate_reflected_wave()
-            - self.child_a.borrow_mut().propagate_reflected_wave();
-        self.b_temp = self.b_child_a * self.b_diff;
-        self.base.b = self.child_b.borrow().get_reflected_wave() + self.b_temp;
-        self.base.b
+impl<A: WDFComponent, B: WDFComponent> WDFComponent for ParallelAdaptor<A, B> {
+    fn port_impedance(&self) -> f64 {
+        self.base.rp
     }
 
     fn calc_impedance(&mut self) {
-        self.base.rp = self.child_a.borrow().get_port_admittance()
-            + self.child_b.borrow().get_port_admittance();
-        self.base.g = self.child_a.borrow().get_port_admittance() / self.base.g;
+        self.child_a.calc_impedance();
+        self.child_b.calc_impedance();
+        let ga = self.child_a.port_admittance();
+        let gb = self.child_b.port_admittance();
+        self.base.set_impedance(1.0 / (ga + gb));
+        self.a_reflect = ga / (ga + gb);
     }
 
-    fn update_impedance(&mut self) {
-        self.base.update_impedance();
+    fn incident(&mut self, a: f64) {
+        // outgoing wave on each child port is `a + b_0 - b_child`
+        let b2 = a + self.b_temp;
+        self.child_a.incident(b2 + self.b_diff);
+        self.child_b.incident(b2);
+        self.base.a = a;
+    }
+
+    fn reflected(&mut self) -> f64 {
+        let b_a = self.child_a.reflected();
+        let b_b = self.child_b.reflected();
+        self.b_diff = b_b - b_a;
+        self.b_temp = -self.a_reflect * self.b_diff;
+        self.base.b = b_b + self.b_temp;
+        self.base.b
+    }
+
+    fn reflected_wave(&self) -> f64 {
+        self.base.b
+    }
+
+    fn voltage(&self) -> f64 {
+        self.base.voltage()
+    }
+
+    fn current(&self) -> f64 {
+        self.base.current()
     }
 
     fn reset(&mut self) {
         self.base.reset();
+        self.b_temp = 0.0;
+        self.b_diff = 0.0;
+        self.child_a.reset();
+        self.child_b.reset();
     }
-
-    fn get_reflected_wave(&self) -> f64 {
-        self.base.get_reflected_wave()
-    }
-
-    fn get_port_impedance(&self) -> f64 {
-        self.base.get_port_impedance()
-    }
-
-    fn get_port_admittance(&self) -> f64 {
-        self.base.get_port_admittance()
-    }
-
-    fn print_type(&self) {
-        println!("ParallelAdaptor");
-    }
-}
 }
